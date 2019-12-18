@@ -5,7 +5,7 @@ Scrapes the RBI IFS .xls sheet dumps and imports them.
 2. Downloads each file into a directory and
    converts it to a CSV in another directory.
 3. Each file's http etag header is saved in a file (etags.json),
-   so that unchanged files are not redownloaded each time.
+   so that unchanged files are not re-downloaded each time.
 
 Usage:
   rbiparser download
@@ -77,12 +77,33 @@ def get_sheet_urls(url):
 
 	# Extract the urls.
 	s = soup(r.content, "lxml")
-	links = s.findAll("a", href=re.compile("\.xls$"))
+	links = s.findAll("a", href=re.compile("\.xls"))
 
 	if len(links) < 1:
 		raise Exception("Couldn't find any .xls urls")
 
 	return [l["href"] for l in links]
+
+
+def _set_headers(headers):
+	# For BANK/BANK NAME
+	if 'BANK NAME' in headers:
+		bank_name = headers.index('BANK NAME')
+		headers[bank_name] = 'BANK'
+	if 'MICR' not in headers:
+		headers.insert(2, 'MICR')
+	if 'CITY 1' in headers:
+		city1 = headers.index('CITY 1')
+		headers[city1] = 'DISTRICT'
+	if 'CITY 2' in headers:
+		city2 = headers.index('CITY 2')
+		headers[city2] = 'CITY'
+	if 'ABBREVIATION' not in headers:
+		headers.append('ABBREVIATION')
+	if 'CONTACT' in headers:
+		contact = headers.index('CONTACT')
+		headers[contact] = 'PHONE'
+	return headers
 
 
 def convert_xls_to_csv(src, target, headers):
@@ -92,31 +113,28 @@ def convert_xls_to_csv(src, target, headers):
 	except Exception as e:
 		raise Exception("Can't open sheet.", str(e))
 
-	with open(target, "wb") as cf:
+	with open(target, "w") as cf:
 		writer = csv.writer(cf, quoting=csv.QUOTE_ALL)
 
 		first = False
 		try:
-			for n in xrange(sheet.nrows):
+			for n in range(sheet.nrows):
 				vals = sheet.row_values(n)
-
-				# There are junk unicode characters that need to be stripped.
-				vals = [v.encode("ascii", errors="ignore") if type(v) is unicode else v for v in vals]
 
 				# Validate headers.
 				if not first:
 					first = True
-
-					if len(vals) != len(headers):
-						raise Exception("Headers don't match.")
-
+					vals = _set_headers(vals)
+					print('Headers => ', [vals, headers])
+					# if len(vals) != len(headers):
+					# 	raise Exception("Headers don't match.")
 				writer.writerow(vals)
 		except Exception as e:
 			raise Exception("Can't convert sheet.", str(e))
 
 
 def url_to_file(url):
-	"""Exctract the potential filename from a file url."""
+	"""Extract the potential filename from a file url."""
 	return urlparse(url).path.split("/")[-1]
 
 
@@ -221,9 +239,13 @@ def convert_all(src, target, headers):
 	if not os.path.exists(target):
 		os.mkdir(target)
 
-	files = glob.glob(src + "/*.xls")
+	files = glob.glob(src + "/*.xls") + glob.glob(src + "/*.xlsx")
 	for x in files:
-		c = target + "/" + x.split("/")[-1].replace(".xls", ".csv")
+		file_extension = x.split("/")[-1]
+		if '.xlsx' in file_extension:
+			c = target + "/" + file_extension.replace(".xlsx", ".csv")
+		else:
+			c = target + "/" + file_extension.replace(".xls", ".csv")
 
 		logger.info("%s -> %s" % (x, c))
 
@@ -239,7 +261,7 @@ def combine_csvs(src, master, headers, filters=False):
 	writer = csv.writer(out)
 
 	# Add abbreviation to header
-	headers.append("ABBREVIATION")
+	# headers.append("ABBREVIATION")
 
 	writer.writerow(headers)
 
@@ -258,7 +280,7 @@ def combine_csvs(src, master, headers, filters=False):
 
 def clean_row(row, filters=False):
 	"""Clean a single row from the CSV."""
-	# Load map of bank abbrivations
+	# Load map of bank abbreviations
 	bank_map = load_json(banks_list_filename)
 
 	row = [r.strip() for r in row]
@@ -321,8 +343,10 @@ def clean_row(row, filters=False):
 		row[4] += " - " + pincode
 
 	# Add abbreviation
+	print('params => ', [row[0], bank_map])
 	row[9] = get_abbreviation(clean_line(row[0]), bank_map)
-
+	print('=========')
+	print(row)
 	# clean fields
 	if filters:
 		filters_map = load_json(filters_filename)
